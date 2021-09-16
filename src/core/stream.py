@@ -132,9 +132,3 @@ def s3_file_processing(bucket: str, key: str, file_size_to_process: Optional[int
 
     
     return {'file_key': key, 'data': dtypes}
-
-
-
-if __name__ == '__main__':
-    # process only the first MB of the file contents
-    s3_file_processing('123rf-data-lake', 'pixlr/users/2021/01/01/2021-01-01.csv', file_size_to_process=int(1e6))
