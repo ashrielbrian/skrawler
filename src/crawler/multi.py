@@ -13,8 +13,8 @@ def get_files_from_s3(bucket: str, file_prefix: str) -> List[Any]:
     s3 = boto3.resource('s3')
     bucket = s3.Bucket(bucket)
 
-    s3_objs = bucket.objects.filter(Prefix=file_prefix).limit(2)
-    return [obj for obj in s3_objs]
+    s3_objs = bucket.objects.filter(Prefix=file_prefix).limit(6)
+    return list(s3_objs)
 
 @ray.remote
 def async_s3_file_processing(**kwargs):

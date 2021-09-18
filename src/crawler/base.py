@@ -1,13 +1,16 @@
 import os
 import requests
-import ray
-from ray.util import ActorPool
-from crawler.multi import get_files_from_s3, async_s3_file_processing
 import logging
 import logging.config
-import yaml
-from pathlib import Path
 from typing import Optional, List, Any
+from pathlib import Path
+import json
+
+import yaml
+import ray
+from ray.util import ActorPool
+
+from crawler.multi import get_files_from_s3, async_s3_file_processing
 from core.classifier import S3BaseClassifier, CSVClassifier, JSONClassifier
 
 with open(os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')) as f:
@@ -19,14 +22,11 @@ logger = logging.getLogger('mainLogger')
 
 @ray.remote
 def process_s3_object(classifiers: List[S3BaseClassifier], key: str, file_size_to_process: int = int(1e6)):
-
+    """ Functional implementation of CrawlerWorker """
     for classifier in classifiers:
-
         if isinstance(classifier, CSVClassifier):
             try:
-                v = classifier.classify_csv(key, file_size_to_process)
-                print(v)
-                return v
+                return classifier.classify_csv(key, file_size_to_process)
             except Exception as err:
                 print(f'Failed to classify csv: {str(err)}')
     
@@ -52,7 +52,6 @@ class ElastiSearch:
             None
         """
         r = requests.post(self.endpoint + f'{index}/_doc', json=doc)
-        print(r.json())
         assert r.status_code == 201
         return None
 
@@ -71,26 +70,28 @@ class S3Crawler:
         
         self._output_handler = Outputter(**outputter)
 
-    def crawl(self, bucket: str, prefix_to_search: str, num_cpus=None, classifiers: List[S3BaseClassifier] = None):
+    def crawl(self, bucket: str, prefix_to_search: str, num_workers=None, classifiers: List[S3BaseClassifier] = None):
 
         if classifiers is None: classifiers = [CSVClassifier(bucket=bucket)]
-        num_cpus = 2 if num_cpus is None else num_cpus
-        ray.init(num_cpus=num_cpus)
+        logger.info('Instantiating..')
+        num_workers = 2 if num_workers is None else num_workers
+        
+        logger.info('Starting ray cluster..')
+        ray.init(num_cpus=num_workers)
 
+        logger.info('Fetching s3 objects..')
         objs = get_files_from_s3(bucket, file_prefix=prefix_to_search)
-        # tasks = [async_s3_file_processing.remote(bucket=bucket, key=obj.key, file_size_to_process=int(1e6)) for key in obj_keys]
-        # tasks = [process_s3_object.remote(classifiers=self.classifiers, key=obj.key) for obj in objs]
 
-        pool = ActorPool([CrawlerWorker.remote(classifiers=classifiers) for _ in range(num_cpus)])
+        logger.info('Instantiating worker pool..')
+        pool = ActorPool([CrawlerWorker.remote(classifiers=classifiers) for _ in range(num_workers)])
 
         # returns a list of JSON serializable objects
         logger.info('Beginning to skrawl...')
         outputs = pool.map(lambda actor, obj: actor.extract_schema_from_s3_object.remote(key=obj.key), objs)
         outputs = list(outputs)
-        print(len(outputs))
-        # outputs = ray.get(tasks)
 
         self._output_handler.to_elastisearch(index='123rf-data-lake', docs=outputs)
+        self._output_handler.to_json(outputs)
         
         logger.info('Skrawler done.')
 
@@ -115,7 +116,7 @@ class Outputter:
             self._es = ElastiSearch(es_endpoint=elastisearch_endpoint)
 
         if json_output_path is not None and isinstance(json_output_path, str):
-            logger.info(f'Output metadata will be written to JSON: {elastisearch_endpoint}')
+            logger.info(f'Output metadata will be written to JSON: {json_output_path}')
             self._json_path = json_output_path
 
             # creates the parent/s dir if it does not exist
@@ -124,7 +125,7 @@ class Outputter:
     
     def to_elastisearch(self, index: str, docs: List[Any]):
         """ 
-            TODO: Update the type to something better than List[Any]. Ditto save_to_json
+            TODO: Update type to something better than List[Any]. Ditto save_to_json
             Inputs:
                 docs: list of JSON serializable objects
             Outputs:
@@ -146,7 +147,7 @@ class Outputter:
             except Exception as err:
                 print(f'Error saving to elastisearch: {str(err)}')
 
-    def save_to_json(self, docs: List[Any]):
+    def to_json(self, docs: List[Any]):
         """ 
             Inputs:
                 docs: list of JSON serializable objects
@@ -157,7 +158,8 @@ class Outputter:
             raise Exception('No output JSON path specified.')
 
         with open(self._json_path, 'w') as f:
-            f.write(docs)
+            logger.info('Saving to JSON file.')
+            f.write(json.dumps(docs))
         
 @ray.remote(num_cpus=1)
 class CrawlerWorker:
@@ -171,13 +173,12 @@ class CrawlerWorker:
 
             if isinstance(classifier, CSVClassifier):
                 try:
-                    v = classifier.classify_csv(key, file_size_to_process)
-                    print(v)
-                    return v
+                    return classifier.classify_csv(key, file_size_to_process)
                 except Exception as err:
-                    logger.info(f'Failed to classify csv: {str(err)}')
-                    logger.exception('error!')
+                    logger.error(f'Failed to classify csv: {str(err)}')
+                    logger.exception('extract_schema_from_s3_object')
         
             if isinstance(classifier, JSONClassifier):
+                # TODO:
                 pass
 
