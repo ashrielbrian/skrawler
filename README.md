@@ -64,3 +64,4 @@ I'm currently working on further improvements to `1` before beginning work on `2
 2. Distinguish partitioning vs table levels
 3. Add data sources other than S3
 4. Package it
+5. Add tests/moto

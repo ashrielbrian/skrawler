@@ -6,6 +6,7 @@ from typing import List, Any
 def get_files_from_s3(bucket: str, file_prefix: str) -> List[Any]:
     """ 
         # TODO: Get boto3-stubs for ObjectSummary typing
+        # TODO: Add limit as an arg
         Gets a list of object keys from S3 
 
         Returns boto3.resources.factory.s3.ObjectSummary
