@@ -2,12 +2,27 @@ import boto3
 import pandas as pd
 from botocore.exceptions import ClientError
 from io import StringIO
-from typing import Optional
+from typing import Optional, Dict
 
 class S3BaseClassifier:
-    """ Base class for all S3 object classifiers """
-    def __init__(self, bucket: str):
-        pass
+    """ Base class for all S3 Select object classifiers """
+    def __init__(self, 
+                bucket: str,
+                input_serialization: Dict,
+                output_serialization: Dict,
+                expression_type: str = 'SQL',
+                query: str = None):
+        
+        self.bucket = bucket
+        query = query if query else "SELECT * FROM S3Object"
+
+        self._s3_select_object_content_dict = {
+            'Bucket': bucket,
+            'ExpressionType': expression_type,
+            'Expression': query,
+            'InputSerialization': input_serialization,
+            'OutputSerialization': output_serialization
+        }
 
 
 class CSVClassifier(S3BaseClassifier):
@@ -16,11 +31,25 @@ class CSVClassifier(S3BaseClassifier):
         for a given S3 object key.
     """
     def __init__(self, bucket: str = '', separator: str = ',', delimiter: str = '\n'):
-        super().__init__(bucket=bucket)
-        self._sep   = separator
-        self._delim = delimiter
-        self._bucket = bucket
+        _input_serialization = {
+            'CSV': {
+                'FileHeaderInfo': 'NONE',
+                'FieldDelimiter': separator,
+                'RecordDelimiter': delimiter
+            }
+        }
+        _output_serialization = {
+            'CSV': {
+                'RecordDelimiter': '\n'
+            }
+        }
 
+        super().__init__(
+            bucket=bucket, 
+            input_serialization=_input_serialization, 
+            output_serialization=_output_serialization
+        )
+        
     def stream_csv(self, 
                 key: str, 
                 file_size: int, 
@@ -48,37 +77,20 @@ class CSVClassifier(S3BaseClassifier):
             file_results: str
                 Contents of the file
         """
-        self.s3_client = boto3.session.Session().client('s3')
-        self.s3_bucket = boto3.resource('s3').Bucket(self._bucket)
-
-        sql_expression = sql_expression or "SELECT * FROM S3Object"
+        s3_client = boto3.session.Session().client('s3')
 
         start_byte = 0
         end_byte = min(chunk_bytes, file_size)
         
         # TODO: check what error is raised when select_object_content called on a JSON file
         while start_byte < end_byte:
-            response = self.s3_client.select_object_content(
-                Bucket=self._bucket,
+            response = s3_client.select_object_content(
                 Key=key,
-                ExpressionType='SQL',
-                Expression=sql_expression,
-                InputSerialization={
-                    'CSV': {
-                        'FileHeaderInfo': 'NONE',
-                        'FieldDelimiter': self._sep,
-                        'RecordDelimiter': self._delim
-                    }
-                },
-                OutputSerialization={
-                    'CSV': {
-                        'RecordDelimiter': '\n'
-                    }
-                },
                 ScanRange={
                     'Start': start_byte,
                     'End': end_byte
-                }
+                },
+                **self._s3_select_object_content_dict,
             )
 
             event_stream = response['Payload']
@@ -145,4 +157,22 @@ class CSVClassifier(S3BaseClassifier):
 
 class JSONClassifier(S3BaseClassifier):
     def __init__(self):
+        _input_serialization = {
+            'JSON': {
+                'Type': 'Document'
+            }
+        }
+        _output_serialization = {
+            'CSV': {
+                'RecordDelimiter': '\n'
+            }
+        }
+
+        super().__init__(
+            bucket=bucket, 
+            input_serialization=_input_serialization, 
+            output_serialization=_output_serialization
+        )
+
+    def stream_json(self):
         pass
