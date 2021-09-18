@@ -2,7 +2,7 @@ import os
 import requests
 import logging
 import logging.config
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from pathlib import Path
 import json
 
@@ -70,8 +70,26 @@ class S3Crawler:
         
         self._output_handler = Outputter(**outputter)
 
-    def crawl(self, bucket: str, prefix_to_search: str, num_workers=None, classifiers: List[S3BaseClassifier] = None):
+    def crawl(self, bucket: str, prefix_to_search: str, num_workers: int = None, classifiers: List[S3BaseClassifier] = None):
+        """ 
+            Main driver function of the crawler. Initialises a number of Ray
+            workers to run the classifiers with.
+            
+            Inputs
+            ---
+            bucket: str
+            prefix_to_search: str
+                Where the crawler will begin its search
+            num_workers: int
+                Number of Ray workers to instantiate
+            classifiers: List[S3BaseClassifier]
+                List of classifiers to extract the schema with
+            
+            Outputs
+            ---
+            None
 
+        """
         if classifiers is None: classifiers = [CSVClassifier(bucket=bucket)]
         logger.info('Instantiating..')
         num_workers = 2 if num_workers is None else num_workers
@@ -126,10 +144,13 @@ class Outputter:
     def to_elastisearch(self, index: str, docs: List[Any]):
         """ 
             TODO: Update type to something better than List[Any]. Ditto save_to_json
-            Inputs:
-                docs: list of JSON serializable objects
-            Outputs:
-                None
+            Inputs
+            ---
+            docs: list of JSON serializable objects
+            
+            Outputs
+            ---
+            None
         """
         if not isinstance(self._es, ElastiSearch):
             raise Exception('Elastisearch endpoint is not defined.')
@@ -149,10 +170,13 @@ class Outputter:
 
     def to_json(self, docs: List[Any]):
         """ 
-            Inputs:
-                docs: list of JSON serializable objects
-            Outputs:
-                None
+            Inputs
+            ---
+            docs: list of JSON serializable objects
+            
+            Outputs
+            ---
+            None
         """
         if self._json_path is None:
             raise Exception('No output JSON path specified.')
@@ -163,12 +187,33 @@ class Outputter:
         
 @ray.remote(num_cpus=1)
 class CrawlerWorker:
+    """ 
+        Worker used to run classifiers on S3 object keys.
+    """
     def __init__(self, classifiers: List[S3BaseClassifier]):
         self._classifiers = classifiers
 
     @ray.method(num_returns=1)
-    def extract_schema_from_s3_object(self, key: str, file_size_to_process: int = int(1e6)):
+    def extract_schema_from_s3_object(self, key: str, file_size_to_process: int = int(1e6)) -> Dict:
+        """ 
+            Driver function to extract schema metadata using the provided classifiers.
+            The Worker will loop through each classifier -- if a given classifier fails
+            to extract the metadata, the worker will move on to the next classifier
+            specified in the list.
 
+            Inputs
+            ---
+            key: str
+                S3 object key
+            file_size_to_process: int
+                Total file size to sample in order to infer data types.
+            
+            Outputs
+            ---
+            output: dict
+                Key-value mappings of the form: `{'file_key': key, 'metadata': dtypes}`,
+                where the dtypes is a dictionary of the schema
+        """
         for classifier in self._classifiers:
 
             if isinstance(classifier, CSVClassifier):
