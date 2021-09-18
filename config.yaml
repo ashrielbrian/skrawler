@@ -12,6 +12,3 @@ logging:
     mainLogger:
       level: INFO
       handlers: [main]
-  root:
-    level: DEBUG
-    handlers: [main]
